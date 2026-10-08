@@ -30,6 +30,8 @@ textarea{min-height:70px;resize:vertical}
 .row{display:flex;gap:8px;align-items:center;justify-content:space-between}.row>input,.row>textarea{flex:1}
 .msg{max-width:85%;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--bd);margin-bottom:8px}
 .msg.me{margin-left:auto;background:var(--ac);color:#fff;border-color:var(--ac)}.msg.me .mu{color:#dbe6ff}
+table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px 6px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}th{color:var(--mu);font-weight:600;font-size:12px;text-transform:uppercase}
+.sc{overflow-x:auto}.seg{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:12px 0}.pill{display:inline-block;font-size:12px;padding:1px 9px;border-radius:999px;color:#fff}.pill.ok{background:var(--ok)}.pill.no{background:#d9534f}
 .err{background:#fde8e8;color:#8a1f1f;padding:10px;border-radius:8px;margin-bottom:10px}
 #inst{display:none;position:fixed;right:16px;bottom:16px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:9}
 .login{max-width:340px;margin:12vh auto;padding:0 16px}
@@ -47,7 +49,7 @@ document.getElementById('inst').onclick=function(){if(dp){dp.prompt();dp=null;th
 window.addEventListener('appinstalled',function(){document.getElementById('inst').style.display='none'});
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
 var sb=supabase.createClient(CFG.url,CFG.key);
-var me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
+var view='person',per='week',off=0,deals=[],me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
 var root=document.getElementById('root');
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function fmt(t){return new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}
@@ -75,22 +77,78 @@ async function boot(u){
 }
 async function load(){
   var q=function(t){return sb.from(t).select('*').eq('employee_id',sel).order('created_at')};
-  var r=await Promise.all([q('goals'),q('reports'),q('messages'),isMgr?q('notes'):Promise.resolve({data:[]})]);
-  D={goals:r[0].data||[],reports:r[1].data||[],msgs:r[2].data||[],notes:r[3].data||[]};render();
+  var r=await Promise.all([q('goals'),q('reports'),q('messages'),isMgr?q('notes'):Promise.resolve({data:[]}),sb.from('deals').select('*').order('created_at',{ascending:false}).limit(1000)]);
+  D={goals:r[0].data||[],reports:r[1].data||[],msgs:r[2].data||[],notes:r[3].data||[]};deals=r[4].data||[];
+  if(r[4].error)err='Sales data could not load. Did you run update.sql in Supabase? ('+r[4].error.message+')';
+  render();
 }
-
+function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+function peso(n){return '\u20B1'+Number(n||0).toLocaleString('en-PH',{maximumFractionDigits:0})}
+function range(){
+  var n=new Date(),a,b,lbl;
+  if(per==='week'){var dow=(n.getDay()+6)%7;a=new Date(n.getFullYear(),n.getMonth(),n.getDate()-dow+off*7);b=new Date(a.getFullYear(),a.getMonth(),a.getDate()+6);
+    lbl=a.toLocaleDateString([],{month:'short',day:'numeric'})+' \u2013 '+b.toLocaleDateString([],{month:'short',day:'numeric',year:'numeric'})}
+  else{a=new Date(n.getFullYear(),n.getMonth()+off,1);b=new Date(a.getFullYear(),a.getMonth()+1,0);lbl=a.toLocaleDateString([],{month:'long',year:'numeric'})}
+  return {a:ymd(a),b:ymd(b),lbl:lbl};
+}
 function render(){
   snap();
   if(!me){root.innerHTML=loginView();restore();return}
-  var h='<div class="app"><aside><h1>Team Tracker</h1><div class="mu">'+esc(me.full_name)+' · '+(isMgr?'Manager':'Team member')+'</div><button class="b g" data-a="out" style="margin:8px 0">Sign out</button><h3>Team</h3>';
-  people.forEach(function(p){h+='<button class="emp'+(p.id===sel?' on':'')+'" data-a="sel" data-id="'+p.id+'"><b>'+esc(p.full_name||'Unnamed')+'</b><span class="mu">'+esc(p.job_title||p.role)+'</span></button>'});
+  var h='<div class="app"><aside><h1>Team Tracker</h1><div class="mu">'+esc(me.full_name)+' \u00B7 '+(isMgr?'Manager':'Team member')+'</div><button class="b g" data-a="out" style="margin:8px 0">Sign out</button>'
+   +'<button class="emp'+(view==='dash'?' on':'')+'" data-a="dash"><b>Sales dashboard</b><span class="mu">Weekly &amp; monthly</span></button><h3>Team</h3>';
+  people.forEach(function(p){h+='<button class="emp'+(view==='person'&&p.id===sel?' on':'')+'" data-a="sel" data-id="'+p.id+'"><b>'+esc(p.full_name||'Unnamed')+'</b><span class="mu">'+esc(p.job_title||p.role)+'</span></button>'});
   h+='</aside><main>'+(err?'<div class="err">'+esc(err)+'</div>':'');
+  if(view==='dash'){root.innerHTML=h+vDash()+'</main></div>';restore();return}
   var e=people.filter(function(p){return p.id===sel})[0];
   if(!e){root.innerHTML=h+'</main></div>';return}
-  var tabs=[['overview','Overview'],['reports','Reports'],['messages','Messages']];if(isMgr)tabs.push(['notes','Private notes']);
+  var tabs=[['overview','Overview'],['deals','Deals'],['reports','Reports'],['messages','Messages']];if(isMgr)tabs.push(['notes','Private notes']);
+  if(!tabs.some(function(t){return t[0]===tab}))tab='overview';
   h+='<h2>'+esc(e.full_name)+'</h2><div class="mu">'+esc(e.job_title||'No job title set')+'</div><div class="tabs">'+tabs.map(function(t){return '<button class="tab'+(tab===t[0]?' on':'')+'" data-a="tab" data-id="'+t[0]+'">'+t[1]+'</button>'}).join('')+'</div>';
-  h+=({overview:vOverview,reports:vReports,messages:vMsgs,notes:vNotes}[tab])(e);
+  h+=({overview:vOverview,deals:vDeals,reports:vReports,messages:vMsgs,notes:vNotes}[tab])(e);
   root.innerHTML=h+'</main></div>';restore();
+}
+function dealCard(d,showWho,canClose){
+  var ok=d.status==='closed';
+  return '<div class="card"><div class="row"><b>'+esc(d.customer)+(d.model?' \u00B7 '+esc(d.model):'')+'</b><span class="pill '+(ok?'ok':'no')+'">'+(ok?'Closed '+peso(d.amount):'Not closed')+'</span></div>'
+   +'<div class="mu">'+(showWho?esc(names[d.employee_id]||'Teammate')+' \u00B7 ':'')+esc(d.deal_date)+'</div>'
+   +(d.reason?'<p style="white-space:pre-wrap;margin:8px 0 0"><span class="mu">Reason not closed:</span> '+esc(d.reason)+'</p>':'')
+   +(!ok&&canClose?'<div class="row" style="margin-top:8px"><input type="number" min="0" data-k="am_'+d.id+'" placeholder="Sale amount (\u20B1) if now closed"><button class="b" data-a="close" data-id="'+d.id+'">Mark as closed</button></div>':'')+'</div>';
+}
+function vDeals(e){
+  var today=ymd(new Date());
+  var h='<div class="card"><b>Log a deal</b><input data-k="dc" placeholder="Customer name"><input data-k="dm" placeholder="Motorcycle model"><select data-k="ds"><option value="closed">Sale closed</option><option value="not_closed">Not closed</option></select><input data-k="da" type="number" min="0" placeholder="Sale amount (\u20B1) \u2013 for closed sales"><textarea data-k="dr" placeholder="Reason (required when the sale was NOT closed)"></textarea><input data-k="dd" type="date" value="'+today+'"><button class="b" data-a="addDeal">Save deal</button></div>';
+  var mine=deals.filter(function(d){return d.employee_id===e.id});
+  var c=mine.filter(function(d){return d.status==='closed'}).length;
+  h+='<p class="mu">'+c+' closed \u00B7 '+(mine.length-c)+' not closed</p>';
+  mine.sort(function(a,b){return a.deal_date<b.deal_date?1:-1}).forEach(function(d){h+=dealCard(d,false,true)});
+  return h;
+}
+function vDash(){
+  var R=range(),inR=deals.filter(function(d){return d.deal_date>=R.a&&d.deal_date<=R.b});
+  var assoc=people.filter(function(p){return p.role==='employee'||inR.some(function(d){return d.employee_id===p.id})});
+  var rows=assoc.map(function(p){
+    var mine=inR.filter(function(d){return d.employee_id===p.id}),cl=mine.filter(function(d){return d.status==='closed'});
+    var tg=per==='week'?p.weekly_target:p.monthly_target;
+    return {p:p,units:cl.length,rev:cl.reduce(function(a,d){return a+Number(d.amount||0)},0),nc:mine.length-cl.length,tg:tg||0};
+  }).sort(function(a,b){return b.rev-a.rev});
+  var tU=0,tR=0,tN=0;rows.forEach(function(r){tU+=r.units;tR+=r.rev;tN+=r.nc});
+  var rate=(tU+tN)?Math.round(tU/(tU+tN)*100):0;
+  var h='<h2>Sales dashboard</h2><div class="seg"><button class="tab'+(per==='week'?' on':'')+'" data-a="per" data-id="week">Weekly</button><button class="tab'+(per==='month'?' on':'')+'" data-a="per" data-id="month">Monthly</button>'
+   +'<button class="b g" data-a="nav" data-id="-1">\u25C0</button><b>'+esc(R.lbl)+'</b><button class="b g" data-a="nav" data-id="1">\u25B6</button><button class="b g" data-a="nav" data-id="0">'+(per==='week'?'This week':'This month')+'</button></div>';
+  h+='<div class="stats"><div class="card stat"><b>'+tU+'</b><span class="mu">Bikes sold</span></div><div class="card stat"><b>'+peso(tR)+'</b><span class="mu">Total sales</span></div><div class="card stat"><b>'+tN+'</b><span class="mu">Not closed</span></div><div class="card stat"><b>'+rate+'%</b><span class="mu">Close rate</span></div></div>';
+  h+='<h3>Sales by marketing associate</h3><div class="card sc"><table><tr><th>Associate</th><th>Sold</th><th>Sales</th>'+(isMgr?'<th>% of team</th>':'')+'<th>Not closed</th><th>Target progress</th></tr>';
+  rows.forEach(function(r){
+    var sh=tR?Math.round(r.rev/tR*100):0,tp=r.tg?Math.round(r.units/r.tg*100):null;
+    h+='<tr><td><b>'+esc(r.p.full_name||'Unnamed')+'</b></td><td>'+r.units+'</td><td>'+peso(r.rev)+'</td>'+(isMgr?'<td>'+sh+'%</td>':'')+'<td>'+r.nc+'</td><td style="min-width:150px">'+(tp===null?'<span class="mu">No target set</span>':r.units+' / '+r.tg+' ('+tp+'%)<div class="bar"><i style="width:'+Math.min(tp,100)+'%"></i></div>')+'</td></tr>';
+  });
+  if(!rows.length)h+='<tr><td colspan="6" class="mu">No team members yet.</td></tr>';
+  else if(isMgr)h+='<tr><td><b>Team total</b></td><td><b>'+tU+'</b></td><td><b>'+peso(tR)+'</b></td><td><b>100%</b></td><td><b>'+tN+'</b></td><td></td></tr>';
+  h+='</table></div><p class="mu">Weekly targets use Monday\u2013Sunday. Targets are counted in bikes sold and set per person on their Overview page.</p>';
+  var nc=inR.filter(function(d){return d.status!=='closed'}).sort(function(a,b){return a.deal_date<b.deal_date?1:-1});
+  h+='<h3>Deals not closed ('+nc.length+')</h3>';
+  nc.forEach(function(d){h+=dealCard(d,isMgr,false)});
+  if(!nc.length)h+='<p class="mu">No unclosed deals in this period.</p>';
+  return h;
 }
 function loginView(){
   return '<div class="login"><h1>Team Performance Tracker</h1><p class="mu">'+(mode==='in'?'Sign in to continue.':'Create your account. The very first account becomes the manager.')+'</p>'+(err?'<div class="err">'+esc(err)+'</div>':'')
@@ -104,6 +162,7 @@ function vOverview(e){
   var gp=g.length?Math.round(g.reduce(function(a,x){return a+x.pct},0)/g.length):0;
   var h='<div class="stats"><div class="card stat"><b>'+rs.length+'</b><span class="mu">Reports</span></div><div class="card stat"><b>'+avg+'</b><span class="mu">Avg self-rating</span></div><div class="card stat"><b>'+gp+'%</b><span class="mu">Goal progress</span></div></div>';
   if(isMgr)h+='<div class="row card"><input data-k="jt" placeholder="Job title" value="'+esc(e.job_title)+'"><button class="b" data-a="title">Save title</button>'+(e.id!==me.id?'<button class="b g" data-a="role">'+(e.role==='manager'?'Make employee':'Make manager')+'</button>':'')+'</div>';
+  if(isMgr)h+='<div class="row card"><input type="number" min="0" data-k="tw" placeholder="Weekly target (bikes)" value="'+(e.weekly_target||'')+'"><input type="number" min="0" data-k="tm" placeholder="Monthly target (bikes)" value="'+(e.monthly_target||'')+'"><button class="b" data-a="targets">Save targets</button></div>';
   h+='<h3>Goals</h3>';
   g.forEach(function(x){h+='<div class="card"><div class="row"><b>'+esc(x.text)+'</b><span class="mu">'+x.pct+'%</span></div><div class="bar"><i style="width:'+x.pct+'%"></i></div>'+(isMgr?'<input type="range" min="0" max="100" step="5" value="'+x.pct+'" data-a="pct" data-id="'+x.id+'">':'')+'</div>'});
   if(!g.length)h+='<p class="mu">No goals yet.</p>';
@@ -131,13 +190,26 @@ document.addEventListener('click',async function(ev){
   else if(a==='login'){var r=await sb.auth.signInWithPassword({email:val('em'),password:val('pw')});if(r.error){err=r.error.message;render()}}
   else if(a==='signup'){var r=await sb.auth.signUp({email:val('em'),password:val('pw'),options:{data:{full_name:val('fn')}}});if(r.error){err=r.error.message;render()}else if(!r.data.session){err='Check your email to confirm your account, then sign in.';mode='in';render()}}
   else if(a==='out'){sb.auth.signOut()}
-  else if(a==='sel'){sel=t.dataset.id;await load()}
+  else if(a==='sel'){sel=t.dataset.id;view='person';await load()}
+  else if(a==='dash'){view='dash';render()}
+  else if(a==='per'){per=t.dataset.id;off=0;render()}
+  else if(a==='nav'){off=t.dataset.id==='0'?0:off+(+t.dataset.id);render()}
   else if(a==='tab'){tab=t.dataset.id;render()}
   else if(a==='title'){fail(await sb.from('profiles').update({job_title:val('jt')}).eq('id',sel));await boot(me)}
   else if(a==='role'){var p=people.filter(function(x){return x.id===sel})[0];fail(await sb.from('profiles').update({role:p.role==='manager'?'employee':'manager'}).eq('id',sel));await boot(me)}
   else if(a==='addGoal'){var g=val('goal');if(g){clr('goal');fail(await sb.from('goals').insert({employee_id:sel,text:g}));load()}}
   else if(a==='addReport'){var ti=val('rt'),b=val('rb');if(ti&&b){var rt=val('rr');clr('rt');clr('rb');clr('rr');fail(await sb.from('reports').insert({employee_id:sel,title:ti,body:b,rating:rt?+rt:null}));load()}}
   else if(a==='addMsg'){var m=val('mt');if(m){clr('mt');fail(await sb.from('messages').insert({employee_id:sel,text:m}));load()}}
+  else if(a==='targets'){fail(await sb.from('profiles').update({weekly_target:parseInt(val('tw'))||0,monthly_target:parseInt(val('tm'))||0}).eq('id',sel));await boot(me)}
+  else if(a==='addDeal'){
+    var st=val('ds'),rs=val('dr'),cu=val('dc'),am=+val('da')||0;
+    if(!cu){err='Enter the customer name.';render();return}
+    if(st==='closed'&&am<=0){err='Enter the sale amount for a closed sale.';render();return}
+    if(st!=='closed'&&!rs){err='Please write the reason the sale was not closed.';render();return}
+    var row={employee_id:sel,customer:cu,model:val('dm'),amount:st==='closed'?am:0,status:st,reason:rs||null,deal_date:val('dd')||ymd(new Date())};
+    ['dc','dm','da','dr'].forEach(clr);fail(await sb.from('deals').insert(row));load()}
+  else if(a==='close'){var v=+val('am_'+t.dataset.id)||0;if(v<=0){err='Enter the sale amount first.';render();return}
+    fail(await sb.from('deals').update({status:'closed',amount:v,deal_date:ymd(new Date())}).eq('id',t.dataset.id));load()}
   else if(a==='addNote'){var n=val('nt');if(n){clr('nt');fail(await sb.from('notes').insert({employee_id:sel,text:n}));load()}}
 });
 document.addEventListener('change',async function(ev){
