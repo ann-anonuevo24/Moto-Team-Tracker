@@ -1,3 +1,1 @@
-// Paste your values from Supabase > Project Settings > API.
-// The anon key is safe to publish: Row Level Security (schema.sql) protects the data.
-window.CFG = { url: "https://YOUR-PROJECT.supabase.co", key: "YOUR-ANON-PUBLIC-KEY" };
+window.CFG = { url: "https://cayywevkrlqebnnbrcdi.supabase.co", key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNheXl3ZXZrcmxxZWJubmJyY2RpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE0NTIxNzIsImV4cCI6MjEwNzAyODE3Mn0.xE61LjWEYzznmxP8N79RRMt0ipMNn3IMaWKVdcGYTu8" };
