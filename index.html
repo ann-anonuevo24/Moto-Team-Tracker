@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Team Performance Tracker</title>
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--tx:#1c2430;--mu:#657083;--bd:#e3e7ee;--ac:#2f6fed;--ok:#1f9d63}
+@media(prefers-color-scheme:dark){:root{--bg:#12161c;--card:#1b212a;--tx:#e8ecf2;--mu:#98a3b5;--bd:#2b3340;--ac:#5b92ff;--ok:#3ac084}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+.app{display:grid;grid-template-columns:260px 1fr;min-height:100vh}@media(max-width:720px){.app{grid-template-columns:1fr}}
+aside{background:var(--card);border-right:1px solid var(--bd);padding:16px}main{padding:20px;max-width:900px;width:100%}
+h1{font-size:17px;margin:0 0 4px}h2{font-size:20px;margin:0}h3{font-size:13px;margin:18px 0 8px;color:var(--mu);text-transform:uppercase;letter-spacing:.04em}
+.mu{color:var(--mu);font-size:13px}
+.emp{display:block;width:100%;text-align:left;padding:10px;border:1px solid transparent;border-radius:8px;background:none;color:inherit;cursor:pointer;font:inherit}
+.emp:hover,.emp.on{background:var(--bg)}.emp.on{border-color:var(--ac)}.emp b{display:block}
+input,textarea,select,button{font:inherit;color:var(--tx)}
+input,textarea,select{width:100%;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:var(--bg);margin:4px 0}
+textarea{min-height:70px;resize:vertical}
+.b{background:var(--ac);color:#fff;border:0;border-radius:8px;padding:8px 14px;cursor:pointer;margin-top:4px}
+.b.g{background:none;color:var(--mu);border:1px solid var(--bd)}
+.tabs{display:flex;gap:6px;margin:14px 0;flex-wrap:wrap}
+.tab{padding:7px 13px;border-radius:999px;border:1px solid var(--bd);background:var(--card);cursor:pointer}.tab.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:12px;padding:14px;margin-bottom:10px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px}.stat b{font-size:22px;display:block}
+.bar{height:8px;background:var(--bd);border-radius:6px;overflow:hidden;margin-top:6px}.bar i{display:block;height:100%;background:var(--ok)}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between}.row>input,.row>textarea{flex:1}
+.msg{max-width:85%;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--bd);margin-bottom:8px}
+.msg.me{margin-left:auto;background:var(--ac);color:#fff;border-color:var(--ac)}.msg.me .mu{color:#dbe6ff}
+.err{background:#fde8e8;color:#8a1f1f;padding:10px;border-radius:8px;margin-bottom:10px}
+.login{max-width:340px;margin:12vh auto;padding:0 16px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script>
+var sb=supabase.createClient(CFG.url,CFG.key);
+var me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
+var root=document.getElementById('root');
+function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+function fmt(t){return new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}
+function nm(id){return id===me.id?'You':(names[id]||'Teammate')}
+function val(k){var e=document.querySelector('[data-k="'+k+'"]');return e?e.value.trim():''}
+function clr(k){var e=document.querySelector('[data-k="'+k+'"]');if(e)e.value=''}
+var keep={};
+function snap(){keep={};document.querySelectorAll('[data-k]').forEach(function(e){keep[e.dataset.k]=e.value});var a=document.activeElement;keep._f=a&&a.dataset&&a.dataset.k}
+function restore(){document.querySelectorAll('[data-k]').forEach(function(e){if(keep[e.dataset.k]!=null)e.value=keep[e.dataset.k];if(keep._f&&e.dataset.k===keep._f)e.focus()})}
+function fail(r){if(r&&r.error){err=r.error.message;render()}return r}
+
+sb.auth.onAuthStateChange(function(ev,s){if(ev==='SIGNED_OUT'){me=null;render()}else if(s&&(!me||me.id!==s.user.id))boot(s.user)});
+sb.auth.getSession().then(function(r){if(r.data.session)boot(r.data.session.user);else render()});
+
+async function boot(u){
+  var p=await sb.from('profiles').select('*').eq('id',u.id).single();
+  if(p.error){err=p.error.message;render();return}
+  me=p.data;isMgr=me.role==='manager';
+  var all=await sb.from('profiles').select('*').order('full_name');
+  people=all.data||[];people.forEach(function(x){names[x.id]=x.full_name||'Teammate'});
+  if(!isMgr)people=[me];
+  sel=sel&&people.some(function(x){return x.id===sel})?sel:people[0].id;
+  await load();
+  if(!sub)sub=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},function(){load()}).subscribe();
+}
+async function load(){
+  var q=function(t){return sb.from(t).select('*').eq('employee_id',sel).order('created_at')};
+  var r=await Promise.all([q('goals'),q('reports'),q('messages'),isMgr?q('notes'):Promise.resolve({data:[]})]);
+  D={goals:r[0].data||[],reports:r[1].data||[],msgs:r[2].data||[],notes:r[3].data||[]};render();
+}
+
+function render(){
+  snap();
+  if(!me){root.innerHTML=loginView();restore();return}
+  var h='<div class="app"><aside><h1>Team Tracker</h1><div class="mu">'+esc(me.full_name)+' · '+(isMgr?'Manager':'Team member')+'</div><button class="b g" data-a="out" style="margin:8px 0">Sign out</button><h3>Team</h3>';
+  people.forEach(function(p){h+='<button class="emp'+(p.id===sel?' on':'')+'" data-a="sel" data-id="'+p.id+'"><b>'+esc(p.full_name||'Unnamed')+'</b><span class="mu">'+esc(p.job_title||p.role)+'</span></button>'});
+  h+='</aside><main>'+(err?'<div class="err">'+esc(err)+'</div>':'');
+  var e=people.filter(function(p){return p.id===sel})[0];
+  if(!e){root.innerHTML=h+'</main></div>';return}
+  var tabs=[['overview','Overview'],['reports','Reports'],['messages','Messages']];if(isMgr)tabs.push(['notes','Private notes']);
+  h+='<h2>'+esc(e.full_name)+'</h2><div class="mu">'+esc(e.job_title||'No job title set')+'</div><div class="tabs">'+tabs.map(function(t){return '<button class="tab'+(tab===t[0]?' on':'')+'" data-a="tab" data-id="'+t[0]+'">'+t[1]+'</button>'}).join('')+'</div>';
+  h+=({overview:vOverview,reports:vReports,messages:vMsgs,notes:vNotes}[tab])(e);
+  root.innerHTML=h+'</main></div>';restore();
+}
+function loginView(){
+  return '<div class="login"><h1>Team Performance Tracker</h1><p class="mu">'+(mode==='in'?'Sign in to continue.':'Create your account. The very first account becomes the manager.')+'</p>'+(err?'<div class="err">'+esc(err)+'</div>':'')
+   +(mode==='up'?'<input data-k="fn" placeholder="Full name">':'')+'<input data-k="em" type="email" placeholder="Email"><input data-k="pw" type="password" placeholder="Password (min 6 characters)">'
+   +'<button class="b" data-a="'+(mode==='in'?'login':'signup')+'">'+(mode==='in'?'Sign in':'Create account')+'</button> <button class="b g" data-a="mode">'+(mode==='in'?'Need an account?':'I have an account')+'</button></div>';
+}
+function vOverview(e){
+  var rs=D.reports,g=D.goals;
+  var rated=rs.filter(function(r){return r.rating});
+  var avg=rated.length?(rated.reduce(function(a,r){return a+r.rating},0)/rated.length).toFixed(1):'–';
+  var gp=g.length?Math.round(g.reduce(function(a,x){return a+x.pct},0)/g.length):0;
+  var h='<div class="stats"><div class="card stat"><b>'+rs.length+'</b><span class="mu">Reports</span></div><div class="card stat"><b>'+avg+'</b><span class="mu">Avg self-rating</span></div><div class="card stat"><b>'+gp+'%</b><span class="mu">Goal progress</span></div></div>';
+  if(isMgr)h+='<div class="row card"><input data-k="jt" placeholder="Job title" value="'+esc(e.job_title)+'"><button class="b" data-a="title">Save title</button>'+(e.id!==me.id?'<button class="b g" data-a="role">'+(e.role==='manager'?'Make employee':'Make manager')+'</button>':'')+'</div>';
+  h+='<h3>Goals</h3>';
+  g.forEach(function(x){h+='<div class="card"><div class="row"><b>'+esc(x.text)+'</b><span class="mu">'+x.pct+'%</span></div><div class="bar"><i style="width:'+x.pct+'%"></i></div>'+(isMgr?'<input type="range" min="0" max="100" step="5" value="'+x.pct+'" data-a="pct" data-id="'+x.id+'">':'')+'</div>'});
+  if(!g.length)h+='<p class="mu">No goals yet.</p>';
+  if(isMgr)h+='<div class="row"><input data-k="goal" placeholder="New goal"><button class="b" data-a="addGoal">Add goal</button></div>';
+  return h;
+}
+function vReports(e){
+  var h='<div class="card"><b>Submit a report</b><input data-k="rt" placeholder="Title (e.g. Weekly report)"><textarea data-k="rb" placeholder="What you worked on, results, blockers…"></textarea><select data-k="rr"><option value="">Self-rating (1–5)</option><option>5</option><option>4</option><option>3</option><option>2</option><option>1</option></select><button class="b" data-a="addReport">Submit</button></div>';
+  D.reports.slice().reverse().forEach(function(r){h+='<div class="card"><div class="row"><b>'+esc(r.title)+'</b>'+(r.rating?'<span class="mu">'+r.rating+'/5</span>':'')+'</div><div class="mu">'+esc(nm(r.author_id))+' · '+fmt(r.created_at)+'</div><p style="white-space:pre-wrap;margin:8px 0 0">'+esc(r.body)+'</p></div>'});
+  return h;
+}
+function vMsgs(){
+  var h='';D.msgs.forEach(function(x){h+='<div class="msg'+(x.author_id===me.id?' me':'')+'"><div class="mu">'+esc(nm(x.author_id))+' · '+fmt(x.created_at)+'</div>'+esc(x.text).replace(/\n/g,'<br>')+'</div>'});
+  return (h||'<p class="mu">No messages yet.</p>')+'<div class="row"><textarea data-k="mt" placeholder="Write a message…"></textarea><button class="b" data-a="addMsg">Send</button></div>';
+}
+function vNotes(){
+  var h='<p class="mu">Only managers can see these.</p><div class="card"><textarea data-k="nt" placeholder="Private note…"></textarea><button class="b" data-a="addNote">Save note</button></div>';
+  D.notes.slice().reverse().forEach(function(n){h+='<div class="card"><div class="mu">'+esc(nm(n.author_id))+' · '+fmt(n.created_at)+'</div><p style="white-space:pre-wrap;margin:6px 0 0">'+esc(n.text)+'</p></div>'});
+  return h;
+}
+
+document.addEventListener('click',async function(ev){
+  var t=ev.target.closest('[data-a]');if(!t||t.type==='range')return;var a=t.dataset.a;err='';
+  if(a==='mode'){mode=mode==='in'?'up':'in';render()}
+  else if(a==='login'){var r=await sb.auth.signInWithPassword({email:val('em'),password:val('pw')});if(r.error){err=r.error.message;render()}}
+  else if(a==='signup'){var r=await sb.auth.signUp({email:val('em'),password:val('pw'),options:{data:{full_name:val('fn')}}});if(r.error){err=r.error.message;render()}else if(!r.data.session){err='Check your email to confirm your account, then sign in.';mode='in';render()}}
+  else if(a==='out'){sb.auth.signOut()}
+  else if(a==='sel'){sel=t.dataset.id;await load()}
+  else if(a==='tab'){tab=t.dataset.id;render()}
+  else if(a==='title'){fail(await sb.from('profiles').update({job_title:val('jt')}).eq('id',sel));await boot(me)}
+  else if(a==='role'){var p=people.filter(function(x){return x.id===sel})[0];fail(await sb.from('profiles').update({role:p.role==='manager'?'employee':'manager'}).eq('id',sel));await boot(me)}
+  else if(a==='addGoal'){var g=val('goal');if(g){clr('goal');fail(await sb.from('goals').insert({employee_id:sel,text:g}));load()}}
+  else if(a==='addReport'){var ti=val('rt'),b=val('rb');if(ti&&b){var rt=val('rr');clr('rt');clr('rb');clr('rr');fail(await sb.from('reports').insert({employee_id:sel,title:ti,body:b,rating:rt?+rt:null}));load()}}
+  else if(a==='addMsg'){var m=val('mt');if(m){clr('mt');fail(await sb.from('messages').insert({employee_id:sel,text:m}));load()}}
+  else if(a==='addNote'){var n=val('nt');if(n){clr('nt');fail(await sb.from('notes').insert({employee_id:sel,text:n}));load()}}
+});
+document.addEventListener('change',async function(ev){
+  var t=ev.target;if(t.dataset&&t.dataset.a==='pct'){fail(await sb.from('goals').update({pct:+t.value}).eq('id',t.dataset.id));load()}
+});
+</script>
+</body>
+</html>
