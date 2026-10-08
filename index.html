@@ -4,6 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Team Performance Tracker</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2f6fed">
+<link rel="apple-touch-icon" href="icon-192.png">
 <style>
 :root{--bg:#f6f7f9;--card:#fff;--tx:#1c2430;--mu:#657083;--bd:#e3e7ee;--ac:#2f6fed;--ok:#1f9d63}
 @media(prefers-color-scheme:dark){:root{--bg:#12161c;--card:#1b212a;--tx:#e8ecf2;--mu:#98a3b5;--bd:#2b3340;--ac:#5b92ff;--ok:#3ac084}}
@@ -28,14 +31,21 @@ textarea{min-height:70px;resize:vertical}
 .msg{max-width:85%;padding:8px 12px;border-radius:12px;background:var(--card);border:1px solid var(--bd);margin-bottom:8px}
 .msg.me{margin-left:auto;background:var(--ac);color:#fff;border-color:var(--ac)}.msg.me .mu{color:#dbe6ff}
 .err{background:#fde8e8;color:#8a1f1f;padding:10px;border-radius:8px;margin-bottom:10px}
+#inst{display:none;position:fixed;right:16px;bottom:16px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:9}
 .login{max-width:340px;margin:12vh auto;padding:0 16px}
 </style>
 </head>
 <body>
 <div id="root"></div>
+<button class="b" id="inst">Install app</button>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
 <script src="config.js"></script>
 <script>
+var dp=null;
+window.addEventListener('beforeinstallprompt',function(e){e.preventDefault();dp=e;document.getElementById('inst').style.display='block'});
+document.getElementById('inst').onclick=function(){if(dp){dp.prompt();dp=null;this.style.display='none'}};
+window.addEventListener('appinstalled',function(){document.getElementById('inst').style.display='none'});
+if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
 var sb=supabase.createClient(CFG.url,CFG.key);
 var me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
 var root=document.getElementById('root');
