@@ -32,6 +32,8 @@ textarea{min-height:70px;resize:vertical}
 .msg.me{margin-left:auto;background:var(--ac);color:#fff;border-color:var(--ac)}.msg.me .mu{color:#dbe6ff}
 table{width:100%;border-collapse:collapse;font-size:14px}th,td{padding:8px 6px;border-bottom:1px solid var(--bd);text-align:left;white-space:nowrap}th{color:var(--mu);font-weight:600;font-size:12px;text-transform:uppercase}
 .sc{overflow-x:auto}.seg{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin:12px 0}.pill{display:inline-block;font-size:12px;padding:1px 9px;border-radius:999px;color:#fff}.pill.ok{background:var(--ok)}.pill.no{background:#d9534f}
+.callbar{position:sticky;top:0;z-index:20;background:#1c2430;color:#fff;padding:10px 16px;padding-top:calc(10px + env(safe-area-inset-top,0px));display:flex;gap:10px;align-items:center;justify-content:center;flex-wrap:wrap}
+.callbar .b{margin:0}.callbar .no{background:#d9534f}
 .err{background:#fde8e8;color:#8a1f1f;padding:10px;border-radius:8px;margin-bottom:10px}
 #inst{display:none;position:fixed;right:16px;bottom:16px;box-shadow:0 4px 14px rgba(0,0,0,.25);z-index:9}
 .login{max-width:340px;margin:12vh auto;padding:0 16px}
@@ -49,7 +51,7 @@ document.getElementById('inst').onclick=function(){if(dp){dp.prompt();dp=null;th
 window.addEventListener('appinstalled',function(){document.getElementById('inst').style.display='none'});
 if('serviceWorker' in navigator)window.addEventListener('load',function(){navigator.serviceWorker.register('sw.js').catch(function(){})});
 var sb=supabase.createClient(CFG.url,CFG.key);
-var view='person',per='week',off=0,deals=[],me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
+var mt=[],dir=[],inc=null,out=null,dismissed={},lastKey='',view='person',per='week',off=0,deals=[],me=null,isMgr=false,people=[],names={},sel=null,tab='overview',D={goals:[],reports:[],msgs:[],notes:[]},err='',mode='in',sub=null;
 var root=document.getElementById('root');
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
 function fmt(t){return new Date(t).toLocaleString([], {dateStyle:'medium',timeStyle:'short'})}
@@ -70,16 +72,20 @@ async function boot(u){
   me=p.data;isMgr=me.role==='manager';
   var all=await sb.from('profiles').select('*').order('full_name');
   people=all.data||[];people.forEach(function(x){names[x.id]=x.full_name||'Teammate'});
+  var dr=await sb.from('directory').select('*').order('full_name');dir=dr.data||[];dir.forEach(function(x){names[x.id]=x.full_name||'Teammate'});
   if(!isMgr)people=[me];
   sel=sel&&people.some(function(x){return x.id===sel})?sel:people[0].id;
   await load();
-  if(!sub)sub=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},function(){load()}).subscribe();
+  if(!sub)sub=sb.channel('live').on('postgres_changes',{event:'*',schema:'public'},function(p){if(p&&p.table==='calls')pollCalls();else load()}).subscribe();
+  pollCalls();if(!window._cp)window._cp=setInterval(pollCalls,15000);
 }
 async function load(){
   var q=function(t){return sb.from(t).select('*').eq('employee_id',sel).order('created_at')};
-  var r=await Promise.all([q('goals'),q('reports'),q('messages'),isMgr?q('notes'):Promise.resolve({data:[]}),sb.from('deals').select('*').order('created_at',{ascending:false}).limit(1000)]);
+  var r=await Promise.all([q('goals'),q('reports'),q('messages'),isMgr?q('notes'):Promise.resolve({data:[]}),sb.from('deals').select('*').order('created_at',{ascending:false}).limit(1000),sb.from('meetings').select('*').order('created_at',{ascending:false}).limit(60)]);
+  mt=r[5].data||[];
   D={goals:r[0].data||[],reports:r[1].data||[],msgs:r[2].data||[],notes:r[3].data||[]};deals=r[4].data||[];
   if(r[4].error)err='Sales data could not load. Did you run update.sql in Supabase? ('+r[4].error.message+')';
+  if(r[5].error&&!err)err='Meetings could not load. Did you run calls-update.sql in Supabase? ('+r[5].error.message+')';
   render();
 }
 function ymd(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
@@ -91,13 +97,14 @@ function range(){
   else{a=new Date(n.getFullYear(),n.getMonth()+off,1);b=new Date(a.getFullYear(),a.getMonth()+1,0);lbl=a.toLocaleDateString([],{month:'long',year:'numeric'})}
   return {a:ymd(a),b:ymd(b),lbl:lbl};
 }
-function render(){
+function render0(){
   snap();
   if(!me){root.innerHTML=loginView();restore();return}
   var h='<div class="app"><aside><h1>Team Tracker</h1><div class="mu">'+esc(me.full_name)+' \u00B7 '+(isMgr?'Manager':'Team member')+'</div><button class="b g" data-a="out" style="margin:8px 0">Sign out</button>'
-   +'<button class="emp'+(view==='dash'?' on':'')+'" data-a="dash"><b>Sales dashboard</b><span class="mu">Weekly &amp; monthly</span></button><h3>Team</h3>';
+   +'<button class="emp'+(view==='dash'?' on':'')+'" data-a="dash"><b>Sales dashboard</b><span class="mu">Weekly &amp; monthly</span></button><button class="emp'+(view==='meet'?' on':'')+'" data-a="meet"><b>Meetings &amp; calls</b><span class="mu">Video &amp; voice</span></button><h3>Team</h3>';
   people.forEach(function(p){h+='<button class="emp'+(view==='person'&&p.id===sel?' on':'')+'" data-a="sel" data-id="'+p.id+'"><b>'+esc(p.full_name||'Unnamed')+'</b><span class="mu">'+esc(p.job_title||p.role)+'</span></button>'});
   h+='</aside><main>'+(err?'<div class="err">'+esc(err)+'</div>':'');
+  if(view==='meet'){root.innerHTML=h+vMeet()+'</main></div>';restore();return}
   if(view==='dash'){root.innerHTML=h+vDash()+'</main></div>';restore();return}
   var e=people.filter(function(p){return p.id===sel})[0];
   if(!e){root.innerHTML=h+'</main></div>';return}
@@ -107,6 +114,47 @@ function render(){
   h+=({overview:vOverview,deals:vDeals,reports:vReports,messages:vMsgs,notes:vNotes}[tab])(e);
   root.innerHTML=h+'</main></div>';restore();
 }
+
+function render(){render0();var b=me?callBar():'';if(b)root.insertAdjacentHTML('afterbegin',b)}
+function rid(){var a=new Uint8Array(8);crypto.getRandomValues(a);return 'MotoTeam-'+Array.prototype.map.call(a,function(x){return x.toString(36).padStart(2,'0')}).join('')}
+function meetUrl(room,kind){return 'https://meet.jit.si/'+room+'#userInfo.displayName='+encodeURIComponent('"'+(me.full_name||'Team member')+'"')+(kind==='audio'?'&config.startWithVideoMuted=true':'')}
+function openRoom(room,kind){window.open(meetUrl(room,kind),'_blank','noopener')}
+async function pollCalls(){
+  if(!me)return;
+  var r=await sb.from('calls').select('*').gte('created_at',new Date(Date.now()-120000).toISOString()).order('created_at',{ascending:false}).limit(20);
+  if(r.error)return;
+  var c=r.data||[],n=Date.now();
+  inc=c.filter(function(x){return x.callee_id===me.id&&x.status==='ringing'&&n-new Date(x.created_at)<60000})[0]||null;
+  var o=c.filter(function(x){return x.caller_id===me.id})[0]||null;
+  out=o&&n-new Date(o.created_at)<90000&&o.status!=='ended'&&!dismissed[o.id]?o:null;
+  var k=(inc?inc.id+inc.status:'')+'|'+(out?out.id+out.status:'');
+  if(k!==lastKey){lastKey=k;render()}
+}
+function callBar(){
+  if(inc)return '<div class="callbar"><b>'+esc(names[inc.caller_id]||'A teammate')+'</b> is '+(inc.kind==='audio'?'calling you':'video calling you')+'<button class="b" data-a="accept">Accept</button><button class="b no" data-a="decline">Decline</button></div>';
+  if(out){
+    var w=esc(names[out.callee_id]||'your teammate');
+    if(out.status==='ringing')return '<div class="callbar">Calling <b>'+w+'</b>\u2026 <button class="b no" data-a="cancelcall">Cancel</button></div>';
+    if(out.status==='accepted')return '<div class="callbar"><b>'+w+'</b> accepted your call <button class="b" data-a="reopen">Open call</button><button class="b g" data-a="okcall">Dismiss</button></div>';
+    if(out.status==='declined')return '<div class="callbar"><b>'+w+'</b> declined the call <button class="b g" data-a="okcall">OK</button></div>';
+  }
+  return '';
+}
+function vMeet(){
+  var h='<h2>Meetings &amp; calls</h2><p class="mu">Meetings and calls open in a new tab and work on phones and computers. Allow your camera and microphone when the browser asks.</p>';
+  h+='<h3>Start or schedule a meeting</h3><div class="card"><input data-k="mtt" placeholder="Meeting title (e.g. Monday sales huddle)"><input data-k="mts" type="datetime-local"><div class="row" style="justify-content:flex-start;flex-wrap:wrap"><button class="b" data-a="meetNow">Start meeting now</button><button class="b g" data-a="meetSched">Schedule for the time above</button></div></div>';
+  var n=Date.now(),list=mt.filter(function(m){return m.scheduled_at?new Date(m.scheduled_at).getTime()>n-7200000:new Date(m.created_at).getTime()>n-86400000});
+  list.sort(function(a,b){return new Date(b.scheduled_at||b.created_at)-new Date(a.scheduled_at||a.created_at)});
+  h+='<h3>Upcoming &amp; recent meetings</h3>';
+  list.forEach(function(m){h+='<div class="card"><div class="row"><b>'+esc(m.title)+'</b><span class="mu">'+(m.scheduled_at?'Scheduled '+fmt(m.scheduled_at):'Started '+fmt(m.created_at))+'</span></div><div class="mu">Host: '+esc(nm2(m.created_by))+'</div><div class="row" style="justify-content:flex-start;margin-top:6px"><button class="b" data-a="joinm" data-id="'+m.id+'">Join</button>'+((m.created_by===me.id||isMgr)?'<button class="b g" data-a="delm" data-id="'+m.id+'">Delete</button>':'')+'</div></div>'});
+  if(!list.length)h+='<p class="mu">No meetings yet.</p>';
+  h+='<h3>Call a teammate</h3>';
+  var others=dir.filter(function(p){return p.id!==me.id});
+  others.forEach(function(p){h+='<div class="card"><div class="row"><div><b>'+esc(p.full_name||'Unnamed')+'</b><div class="mu">'+esc(p.job_title||'')+'</div></div><div style="display:flex;gap:6px"><button class="b g" data-a="callu" data-id="'+p.id+'" data-kind="audio">Voice call</button><button class="b" data-a="callu" data-id="'+p.id+'" data-kind="video">Video call</button></div></div></div>'});
+  if(!others.length)h+='<p class="mu">Teammates appear here after they sign up. If this stays empty, make sure you ran calls-update.sql in Supabase.</p>';
+  return h;
+}
+function nm2(id){return id===me.id?'You':(names[id]||'Teammate')}
 function dealCard(d,showWho,canClose){
   var ok=d.status==='closed';
   return '<div class="card"><div class="row"><b>'+esc(d.customer)+(d.model?' \u00B7 '+esc(d.model):'')+'</b><span class="pill '+(ok?'ok':'no')+'">'+(ok?'Closed '+peso(d.amount):'Not closed')+'</span></div>'
@@ -192,6 +240,22 @@ document.addEventListener('click',async function(ev){
   else if(a==='out'){sb.auth.signOut()}
   else if(a==='sel'){sel=t.dataset.id;view='person';await load()}
   else if(a==='dash'){view='dash';render()}
+  else if(a==='meet'){view='meet';render()}
+  else if(a==='meetNow'||a==='meetSched'){
+    var ti=val('mtt')||'Team meeting',sc=val('mts');
+    if(a==='meetSched'&&!sc){err='Pick a date and time to schedule.';render();return}
+    var room=rid();if(a==='meetNow')openRoom(room,'video');
+    fail(await sb.from('meetings').insert({title:ti,room:room,scheduled_at:a==='meetSched'?new Date(sc).toISOString():null}));clr('mtt');clr('mts');load()}
+  else if(a==='joinm'){var m=mt.filter(function(x){return x.id===t.dataset.id})[0];if(m)openRoom(m.room,'video')}
+  else if(a==='delm'){fail(await sb.from('meetings').delete().eq('id',t.dataset.id));load()}
+  else if(a==='callu'){
+    var room2=rid(),kind=t.dataset.kind;openRoom(room2,kind);
+    fail(await sb.from('calls').insert({callee_id:t.dataset.id,room:room2,kind:kind}));pollCalls()}
+  else if(a==='accept'&&inc){openRoom(inc.room,inc.kind);var id1=inc.id;inc=null;await sb.from('calls').update({status:'accepted'}).eq('id',id1);lastKey='';pollCalls()}
+  else if(a==='decline'&&inc){var id2=inc.id;inc=null;await sb.from('calls').update({status:'declined'}).eq('id',id2);lastKey='';pollCalls()}
+  else if(a==='cancelcall'&&out){var id3=out.id;dismissed[id3]=1;out=null;await sb.from('calls').update({status:'ended'}).eq('id',id3);lastKey='';render()}
+  else if(a==='reopen'&&out){openRoom(out.room,out.kind)}
+  else if(a==='okcall'&&out){dismissed[out.id]=1;out=null;lastKey='';render()}
   else if(a==='per'){per=t.dataset.id;off=0;render()}
   else if(a==='nav'){off=t.dataset.id==='0'?0:off+(+t.dataset.id);render()}
   else if(a==='tab'){tab=t.dataset.id;render()}
